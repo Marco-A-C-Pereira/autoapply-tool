@@ -6,14 +6,10 @@ let browser: Browser;
 let context: BrowserContext;
 const data = parse(readFileSync('config.yaml').toString());
 const visitedIDs: string[] = ((): string[] => {
-	try {
-		if (existsSync('./storage/visitedID.json')) {
-			return JSON.parse(readFileSync('./storage/visitedID.json', 'utf8'));
-		}
-		return [];
-	} catch (err) {
-		return [];
+	if (existsSync('./storage/visitedID.json')) {
+		return JSON.parse(readFileSync('./storage/visitedID.json', 'utf8'));
 	}
+	return [];
 })();
 
 const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -21,7 +17,14 @@ const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(reso
 (async () => {
 	browser = await chromium.launch({ headless: false, slowMo: 50 });
 	// context = await browser.newContext(); // Just for testing
-	context = await browser.newContext({ storageState: './storage/auth.json' });
+	// context = await browser.newContext({ storageState: './storage/auth.json' });
+	context = await browser.newContext(
+		(() => {
+			if (existsSync('./storage/auth.json')) {
+				return { storageState: './storage/auth.json' };
+			}
+		})()
+	);
 	let page = await context.newPage();
 	await page.goto(data.url);
 
@@ -92,12 +95,17 @@ async function queryBuilder() {
 
 	return buildQuery.replace(/\s/g, '');
 
+	// 'or just use fucking string.replace()'
 	function addUrlEncodingSymbol(param: string[], symbol: string) {
 		// %20 = %
 		// %2C = ,
 
 		let lastElem = param.pop();
 		return param.map((param) => param + (symbol === '%' ? '%20' : '%2C')).join('') + lastElem;
+	}
+
+	function _() {
+		return 'a';
 	}
 
 	function paramExists(param: string | any[]): boolean {
@@ -161,28 +169,27 @@ async function jobsPageOperations(page: Page) {
 		}
 	}
 
-	async function extractJob(page: Page) {
+	async function extractJob(page: Page): Promise<any> {
 		try {
 			await delay(randomRange(1, 2) * 1000);
 
 			if (await page.waitForSelector('.job-card-container', { timeout: randomRange(4, 5) * 1000 })) {
 				// Beta feature !!
-				const jobCard = page.locator('.job-card-container').first();
+				const jobCard: Locator = page.locator('.job-card-container').first();
 				await jobCard.scrollIntoViewIfNeeded();
 
 				const JobId = await jobCard.getAttribute('data-job-id');
+				const isPromoted = (await jobCard.innerText()).includes('Promoted');
 
-				if (visitedIDs.includes(JobId)) {
+				if (visitedIDs.includes(JobId) || isPromoted) {
 					await removeFromDom(jobCard);
-					sessionVisitedIds.push(data.JobId);
-					console.log('repitiu pai');
 
-					return null; // BUG CREATOR !!!!!!
+					return await extractJob(page);
 				} else {
 					await delay(randomRange(1, 2) * 1000);
 
-					const JobTitle = await jobCard.getByRole('link').innerText();
-					const JobCompany = await jobCard.locator('.job-card-container__primary-description').innerText();
+					const JobTitle: string = await jobCard.getByRole('link').innerText();
+					const JobCompany: string = await jobCard.locator('.job-card-container__primary-description').innerText();
 
 					// jobCard.click(); // Todo: Ative when going to subscribe
 					// await delay(2 * 1000); // hardcoded change later !!!
@@ -199,20 +206,26 @@ async function jobsPageOperations(page: Page) {
 
 	async function paginate(page: Page): Promise<boolean> {
 		try {
-			if (await page.waitForSelector('[class*="pagination__page-state"]', { timeout: randomRange(1, 3) * 1000 })) {
-				const pageIndicatorText = (await page.locator('[class*="pagination__page-state"]').innerText()).trim();
-				const pageNumeration = pageIndicatorText.match(/\d+/g);
+			// if (await page.waitForSelector('[class*="pagination__page-state"]', { timeout: randomRange(1, 3) * 1000 })) {
+			// if (await page.waitForSelector('[class*="pagination__page-state"]', { timeout: randomRange(1, 3) * 1000 })) {
 
-				const currPage = Number(pageNumeration[0]);
-				const lastPage = Number(pageNumeration[1]);
+			// Waiforselector Broke fix later
+			const pageIndicatorText = (await page.locator('[class*="pagination__page-state"]').innerText()).trim();
+			const pageNumeration = pageIndicatorText.match(/\d+/g);
 
-				if (currPage < lastPage) {
-					page.getByLabel(`Page ${currPage + 1}`).click();
-					return true;
-				}
-				return false;
+			const currPage = Number(pageNumeration[0]);
+			const lastPage = Number(pageNumeration[1]);
+
+			if (currPage < lastPage) {
+				page.getByLabel(`Page ${currPage + 1}`).click();
+				return true;
 			}
+
+			return false;
+			// }
 		} catch (err) {
+			console.log(err);
+
 			return false;
 		}
 	}
@@ -231,29 +244,34 @@ function randomRange(min: number, max: number) {
 }
 
 function IdsToJSON(scrapedIds: string[]) {
-	// Read about stream and maybe implement it to speed up the performance
+	// Read about stream and maybe implement it to speed up the performance in the future
 	const IDCollectionPath = './storage/visitedID.json';
-	// console.log(scrapedIds);
 
-	// Sloppy code gonna rewrite it
+	const isEmpty = scrapedIds.length;
+	console.log(scrapedIds);
+
 	try {
-		if (existsSync('./storage/visitedID.json')) {
-			const { birthtime } = statSync(IDCollectionPath);
-			const fileTime = birthtime.getTime();
-			const currentTime = new Date().getTime();
+		if (isEmpty > 0) {
+			if (existsSync('./storage/visitedID.json')) {
+				const { birthtime } = statSync(IDCollectionPath);
+				const fileTime = birthtime.getTime();
+				const currentTime = new Date().getTime();
 
-			if (Math.round((currentTime - fileTime) / 1000) >= 86400) {
-				unlinkSync(IDCollectionPath);
-				writeFileSync(IDCollectionPath, JSON.stringify(scrapedIds), 'utf8');
+				if (Math.round((currentTime - fileTime) / 1000) >= 86400) {
+					unlinkSync(IDCollectionPath);
+					writeFileSync(IDCollectionPath, JSON.stringify(scrapedIds), 'utf8');
+				} else {
+					readFile(IDCollectionPath, 'utf8', (err, data) => {
+						const json = JSON.parse(data);
+						const newJson = json.concat(scrapedIds);
+						writeFileSync(IDCollectionPath, JSON.stringify(newJson), 'utf8');
+					});
+				}
 			} else {
-				readFile(IDCollectionPath, 'utf8', (err, data) => {
-					const json = JSON.parse(data);
-					json.push(scrapedIds);
-					writeFileSync(IDCollectionPath, JSON.stringify(json), 'utf8');
-				});
+				writeFileSync(IDCollectionPath, JSON.stringify(scrapedIds), 'utf8');
 			}
 		} else {
-			writeFileSync(IDCollectionPath, JSON.stringify(scrapedIds), 'utf8');
+			console.log('You are all caught up: ' + isEmpty);
 		}
 	} catch (err) {
 		console.log(err);
