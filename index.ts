@@ -1,6 +1,8 @@
 import { Browser, BrowserContext, Locator, Page, chromium } from 'playwright';
 import { readFileSync, readFile, writeFileSync, statSync, unlinkSync, existsSync } from 'fs';
 import { parse } from 'yaml';
+import queryBuilder from './modules/urlQuery';
+import { optionQuestion, textQuestion } from './interfaces/question';
 
 let browser: Browser;
 let context: BrowserContext;
@@ -17,7 +19,6 @@ const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(reso
 (async () => {
 	browser = await chromium.launch({ headless: false, slowMo: 50 });
 	// context = await browser.newContext(); // Just for testing
-	// context = await browser.newContext({ storageState: './storage/auth.json' });
 	context = await browser.newContext(
 		(() => {
 			if (existsSync('./storage/auth.json')) {
@@ -35,9 +36,7 @@ const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(reso
 		await login(page);
 	}
 
-	await page.goto(await queryBuilder());
-	await page.waitForLoadState('domcontentloaded');
-
+	await goToJobs(page);
 	await jobsPageOperations(page);
 
 	console.timeEnd('AppStart');
@@ -61,78 +60,9 @@ async function login(page: Page) {
 	await context.storageState({ path: './storage/auth.json' });
 }
 
-async function queryBuilder() {
-	// const expected = `https://www.linkedin.com/jobs/search/?currentJobId=3688942139
-	// &f_AL=true
-	// &f_E=1%2C4%2C5
-	// &f_EA=true
-	// &f_JT=F
-	// &f_TPR=r3600
-	// &f_WT=2
-	// &geoId=106057199
-	// &keywords=React
-	// &location=Brazil
-	// &refresh=true
-	// &sortBy=DD
-	// `;
-
-	const jobParameters = data.jobSearch;
-	const filters = data.jobSearch.filters;
-
-	const buildQuery = `https://www.linkedin.com/jobs/search/?currentJobId=3688942139
-	&f_AL=true
-    ${paramExists(filters.experienceLevel) ? '&f_E=' + prepareJobExperienceLevel(filters.experienceLevel) : ''}
-    ${paramExists(filters.underTenApplicants) ? '&f_EA=' + filters.underTenApplicants : ''}
-    ${paramExists(filters.jobType) ? '&f_JT=' + filters.jobType : ''}
-    ${paramExists(filters.datePosted) ? '&f_TPR=r' + filters.datePosted : ''}
-    ${paramExists(filters.workModel) ? '&f_WT=' + filters.workModel : ''}
-	&geoId=${filters.geoId}
-	&keywords=${prepareKeyWords(jobParameters.keyword)}
-	&location=${filters.location}
-	&refresh=true
-    ${paramExists(filters.sortBy) ? '&sortBy=' + filters.sortBy : ''}
-	`;
-
-	return buildQuery.replace(/\s/g, '');
-
-	// 'or just use fucking string.replace()'
-	function addUrlEncodingSymbol(param: string[], symbol: string) {
-		// %20 = %
-		// %2C = ,
-
-		let lastElem = param.pop();
-		return param.map((param) => param + (symbol === '%' ? '%20' : '%2C')).join('') + lastElem;
-	}
-
-	function _() {
-		return 'a';
-	}
-
-	function paramExists(param: string | any[]): boolean {
-		if (!param) {
-			return false;
-		} else if (param && param.length == 0) {
-			return false;
-		} else return true;
-	}
-
-	function prepareKeyWords(keywords: string[]): string {
-		if (keywords.length == 0) {
-			throw new Error('Please input a keyword in the config.yaml');
-		} else if (keywords.length == 1) {
-			return keywords[0];
-		} else {
-			return addUrlEncodingSymbol(keywords, '%');
-		}
-	}
-
-	function prepareJobExperienceLevel(params: string[]): string {
-		if (params.length == 1) {
-			return params[0];
-		} else {
-			return addUrlEncodingSymbol(params, ',');
-		}
-	}
+async function goToJobs(page: Page) {
+	await page.goto(await queryBuilder());
+	await page.waitForLoadState('domcontentloaded');
 }
 
 async function jobsPageOperations(page: Page) {
@@ -146,10 +76,6 @@ async function jobsPageOperations(page: Page) {
 	await jobListLoop(page);
 
 	IdsToJSON(sessionVisitedIds);
-
-	/// --------------
-
-	let jobDescriptionContainer = page.locator('.jobs-search__job-details');
 
 	/// --------------
 
@@ -171,35 +97,43 @@ async function jobsPageOperations(page: Page) {
 
 	async function extractJob(page: Page): Promise<any> {
 		try {
-			await delay(randomRange(1, 2) * 1000);
+			await delay(randomRange(1, 2));
 
-			if (await page.waitForSelector('.job-card-container', { timeout: randomRange(4, 5) * 1000 })) {
-				// Beta feature !!
+			if (await page.waitForSelector('.job-card-container', { timeout: randomRange(4, 5) })) {
 				const jobCard: Locator = page.locator('.job-card-container').first();
 				await jobCard.scrollIntoViewIfNeeded();
 
 				const JobId = await jobCard.getAttribute('data-job-id');
-				const isPromoted = (await jobCard.innerText()).includes('Promoted');
+				const JobTitle: string = await jobCard.getByRole('link').innerText();
+				const JobCompany: string = await jobCard.locator('.job-card-container__primary-description').innerText();
 
-				if (visitedIDs.includes(JobId) || isPromoted) {
+				// const isPromoted = (await jobCard.innerText()).includes('Promoted');
+				// const hasVisited = visitedIDs.includes(JobId);
+				const isPromoted = false;
+				const hasVisited = false;
+
+				const matchCompany = false; // todo
+				const isCompanyBlacklisted = false; // Todo
+				const matchJobTitle = false; // todo
+				const isJobTitleBlacklisted = false; //todo
+
+				if (hasVisited || isPromoted) {
 					await removeFromDom(jobCard);
 
 					return await extractJob(page);
 				} else {
-					await delay(randomRange(1, 2) * 1000);
+					await delay(randomRange(1, 2));
 
-					const JobTitle: string = await jobCard.getByRole('link').innerText();
-					const JobCompany: string = await jobCard.locator('.job-card-container__primary-description').innerText();
-
-					// jobCard.click(); // Todo: Ative when going to subscribe
-					// await delay(2 * 1000); // hardcoded change later !!!
+					await jobCard.click();
+					await applyToJob(page);
 
 					await removeFromDom(jobCard);
 					return { JobId, JobTitle, JobCompany };
 				}
 			}
 		} catch (err) {
-			// console.log(err);
+			console.log('Error in the extracting phase');
+			console.log(err);
 			return null;
 		}
 	}
@@ -209,7 +143,7 @@ async function jobsPageOperations(page: Page) {
 			// if (await page.waitForSelector('[class*="pagination__page-state"]', { timeout: randomRange(1, 3) * 1000 })) {
 			// if (await page.waitForSelector('[class*="pagination__page-state"]', { timeout: randomRange(1, 3) * 1000 })) {
 
-			// Waiforselector Broke fix later
+			// WaitForSelector Broke fix later
 			const pageIndicatorText = (await page.locator('[class*="pagination__page-state"]').innerText()).trim();
 			const pageNumeration = pageIndicatorText.match(/\d+/g);
 
@@ -235,40 +169,175 @@ async function jobsPageOperations(page: Page) {
 			document.querySelector('.job-card-container').remove();
 		});
 	}
+
+	async function applyToJob(page: Page) {
+		// Probably gonna need an expect
+
+		const jobDescriptionContainer = page.locator('.jobs-search__job-details--container');
+		await delay(randomRange(3, 5));
+		await jobDescriptionContainer.getByRole('button', { name: 'Easy Apply' }).click(); // Try role grab kek
+
+		// Insert await for modal !
+		if ((await page.waitForSelector('.jobs-easy-apply-modal')).isVisible()) {
+			const modal = page.locator('.jobs-easy-apply-modal');
+
+			await nextFormStep();
+
+			// Todo: Read and adapt heading for:
+			// Contact info / Home address / Resume /
+			// Work experience / Education / Voluntary self identification
+			// Screening questions / Privacy policy / Additional / Perguntas Adicionais
+
+			// CV Part
+			// THE NIGHTMARE BEGINS !!
+			const allQuestions = modal.locator('.jobs-easy-apply-form-section__grouping');
+			for (let i = 0; i < (await allQuestions.count()); i++) {
+				const question = allQuestions.nth(i);
+
+				// ----
+
+				separatedLog('Question: ' + i);
+
+				if (question.locator('label')) {
+					const sentence = question.locator('label');
+					const sentenceText = (await sentence.innerText()).trim();
+
+					const questionType = question.locator('input[type=text]') ? 'text' : 'textArea';
+					const textInput =
+						questionType === 'text' ? question.locator('input[type=text]') : question.locator('textarea');
+
+					const existingQuestion: textQuestion = await checkTextQuestion(sentenceText, questionType);
+
+					if (existingQuestion) {
+						textInput.type(existingQuestion.answer, { delay: 100 });
+					} else {
+						if (data.options.manualMode) {
+							console.log(`You have ${data.options.questionTimer} to answer the question in the browser`);
+							await delay(data.options.questionTimer * 1000);
+
+							const textQuestionObject: textQuestion = {
+								answer: (await textInput.innerText()).trim(),
+								heading: sentenceText,
+								type: questionType,
+							};
+							extractTextQuestion(textQuestionObject);
+						} else {
+							// Todo: NLP ?
+						}
+					}
+
+					//// ----
+				} else if (question.locator('fieldset')) {
+					const sentence = question.locator('legend');
+					separatedLog('Question:' + (await sentence.innerText()));
+
+					const options = question.locator('.fb-text-selectable__option');
+					for (let i = 0; i < (await options.count()); i++) {
+						const option = options.nth(i);
+
+						const heading = option.locator('label').innerText();
+					}
+
+					console.log('tem Fieldset');
+				} else if (question.locator('select')) {
+					// Input Select (1º <option> is the label)
+					const sentence = question.locator('option').first();
+					separatedLog('Question:' + (await sentence.innerText()));
+
+					// await extractQuestion('select', sentence);
+
+					console.log('tem Select');
+				}
+
+				//// ----
+
+				async function extractTextQuestion(textQuestionObject: textQuestion) {
+					const questionsPath = './storage/questions.json';
+
+					readFile(questionsPath, 'utf8', (err, data) => {
+						const json = JSON.parse(data);
+						const newJson = json.textQuestion.push(textQuestionObject);
+						writeFileSync(questionsPath, JSON.stringify(newJson), 'utf8');
+					});
+				}
+
+				async function extractOptionsQuestion(optionsQuestionObject: optionQuestion) {
+					const questionsPath = './storage/questions.json';
+
+					readFile(questionsPath, 'utf8', (err, data) => {
+						const json = JSON.parse(data);
+						const newJson = json.optionQuestion.push(optionsQuestionObject);
+						writeFileSync(questionsPath, JSON.stringify(newJson), 'utf8');
+					});
+				}
+
+				async function checkTextQuestion(heading: string, questionType: 'text' | 'textArea') {
+					const questionsPath = './storage/questions.json';
+					const questions = JSON.parse(readFileSync(questionsPath, 'utf8')).textQuestion;
+					const matchingQuestion: textQuestion[] = questions.filter((question: textQuestion) => {
+						question.type === questionType && question.heading === heading && question.answer !== '';
+					});
+
+					return matchingQuestion.length > 0 ? matchingQuestion[0] : null;
+				}
+			}
+
+			async function nextFormStep() {
+				await delay(randomRange(1, 2));
+				const form = modal.locator('form');
+				const modalPageTitle = (await form.locator('h3').first().innerText()).trim();
+
+				// if (modalPageTitle === 'Perguntas adicionais' || modalPageTitle === 'Additional Questions') {
+				if (!['Perguntas adicionais', 'Additional Questions'].includes(modalPageTitle)) {
+					await form.locator('button').filter({ hasText: 'Next' }).click();
+					await nextFormStep();
+				}
+			}
+		}
+	}
 }
 
 /// --------------
 
 function randomRange(min: number, max: number) {
-	return Math.random() * (max - min) + min;
+	// return parseFloat((Math.random() * (max - min) + min).toFixed(5));
+	return parseFloat((Math.random() * (max - min) + min).toFixed(5)) * 1000;
+}
+
+function separatedLog(contents: string) {
+	console.log('/// --------------');
+	console.log(contents);
+	console.log('/// --------------');
 }
 
 function IdsToJSON(scrapedIds: string[]) {
 	// Read about stream and maybe implement it to speed up the performance in the future
-	const IDCollectionPath = './storage/visitedID.json';
+	const IdStoragePath = './storage/visitedID.json';
 
-	const isEmpty = scrapedIds.length;
-	console.log(scrapedIds);
+	// const isEmpty = scrapedIds.length;
+	const isEmpty = 0; // TEMP VALUE
+	console.log('IsEmpty is using 0 !!');
 
 	try {
 		if (isEmpty > 0) {
 			if (existsSync('./storage/visitedID.json')) {
-				const { birthtime } = statSync(IDCollectionPath);
-				const fileTime = birthtime.getTime();
-				const currentTime = new Date().getTime();
+				const { birthtime } = statSync(IdStoragePath);
+				const fileTime: number = birthtime.getTime();
+				const currentTime: number = new Date().getTime();
+				const isMoreThan24h: boolean = Math.round((currentTime - fileTime) / 1000) >= 86400;
 
-				if (Math.round((currentTime - fileTime) / 1000) >= 86400) {
-					unlinkSync(IDCollectionPath);
-					writeFileSync(IDCollectionPath, JSON.stringify(scrapedIds), 'utf8');
+				if (isMoreThan24h) {
+					unlinkSync(IdStoragePath);
+					writeFileSync(IdStoragePath, JSON.stringify(scrapedIds), 'utf8');
 				} else {
-					readFile(IDCollectionPath, 'utf8', (err, data) => {
+					readFile(IdStoragePath, 'utf8', (err, data) => {
 						const json = JSON.parse(data);
 						const newJson = json.concat(scrapedIds);
-						writeFileSync(IDCollectionPath, JSON.stringify(newJson), 'utf8');
+						writeFileSync(IdStoragePath, JSON.stringify(newJson), 'utf8');
 					});
 				}
 			} else {
-				writeFileSync(IDCollectionPath, JSON.stringify(scrapedIds), 'utf8');
+				writeFileSync(IdStoragePath, JSON.stringify(scrapedIds), 'utf8');
 			}
 		} else {
 			console.log('You are all caught up: ' + isEmpty);
