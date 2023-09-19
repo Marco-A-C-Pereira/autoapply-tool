@@ -2,7 +2,13 @@ import { Browser, BrowserContext, Locator, Page, chromium } from 'playwright';
 import { readFileSync, readFile, writeFileSync, statSync, unlinkSync, existsSync } from 'fs';
 import { parse } from 'yaml';
 import queryBuilder from './modules/urlQuery';
-import { optionQuestion, textQuestion } from './interfaces/question';
+import { option, optionQuestion, textQuestion } from './interfaces/question';
+import {
+	checkOptionsQuestion,
+	checkTextQuestion,
+	saveOptionsQuestion,
+	saveTextQuestion,
+} from './modules/questionOperations';
 
 let browser: Browser;
 let context: BrowserContext;
@@ -110,6 +116,7 @@ async function jobsPageOperations(page: Page) {
 				// const isPromoted = (await jobCard.innerText()).includes('Promoted');
 				// const hasVisited = visitedIDs.includes(JobId);
 				const isPromoted = false;
+				const isApplied = (await jobCard.innerText()).includes('Applied');
 				const hasVisited = false;
 
 				const matchCompany = false; // todo
@@ -117,7 +124,7 @@ async function jobsPageOperations(page: Page) {
 				const matchJobTitle = false; // todo
 				const isJobTitleBlacklisted = false; //todo
 
-				if (hasVisited || isPromoted) {
+				if (hasVisited || isPromoted || isApplied) {
 					await removeFromDom(jobCard);
 
 					return await extractJob(page);
@@ -196,31 +203,34 @@ async function jobsPageOperations(page: Page) {
 
 				// ----
 
-				separatedLog('Question: ' + i);
+				separatedLog('Question: ' + i + 1);
 
 				if (question.locator('label')) {
 					const sentence = question.locator('label');
 					const sentenceText = (await sentence.innerText()).trim();
 
-					const questionType = question.locator('input[type=text]') ? 'text' : 'textArea';
+					const questionType = question.locator('input[type=text]').isVisible() ? 'text' : 'textArea';
 					const textInput =
 						questionType === 'text' ? question.locator('input[type=text]') : question.locator('textarea');
 
-					const existingQuestion: textQuestion = await checkTextQuestion(sentenceText, questionType);
+					const existingQuestion: textQuestion = checkTextQuestion(sentenceText, questionType);
 
 					if (existingQuestion) {
+						// if (existingQuestion && (await textInput.inputValue()) === '') {
 						textInput.type(existingQuestion.answer, { delay: 100 });
 					} else {
 						if (data.options.manualMode) {
-							console.log(`You have ${data.options.questionTimer} to answer the question in the browser`);
+							terminalTimer(data.options.questionTimer);
 							await delay(data.options.questionTimer * 1000);
 
 							const textQuestionObject: textQuestion = {
-								answer: (await textInput.innerText()).trim(),
 								heading: sentenceText,
-								type: questionType,
+								answer: (await textInput.inputValue()).trim(),
 							};
-							extractTextQuestion(textQuestionObject);
+
+							console.log(textQuestionObject);
+
+							saveTextQuestion(textQuestionObject, questionType);
 						} else {
 							// Todo: NLP ?
 						}
@@ -229,16 +239,49 @@ async function jobsPageOperations(page: Page) {
 					//// ----
 				} else if (question.locator('fieldset')) {
 					const sentence = question.locator('legend');
-					separatedLog('Question:' + (await sentence.innerText()));
+					const sentenceText = (await sentence.innerText()).trim();
+					const questionType = question.locator('input[type=radio]').isVisible() ? 'radio' : 'checkbox';
+					const optionsList: option[] = [];
+					const optionsContainers = question.locator('.fb-text-selectable__option');
 
-					const options = question.locator('.fb-text-selectable__option');
-					for (let i = 0; i < (await options.count()); i++) {
-						const option = options.nth(i);
+					const existingQuestion: optionQuestion = checkOptionsQuestion(sentenceText, questionType);
+					if (existingQuestion) {
+						for (let i = 0; i < (await optionsContainers.count()); i++) {
+							const optionsContainer = optionsContainers.nth(i);
 
-						const heading = option.locator('label').innerText();
+							const optionHeading = (await optionsContainer.locator('label').innerText()).trim();
+							const matchingQuestion = existingQuestion.options.filter(
+								(option) => option.optionHeading === optionHeading && option.isAnswer
+							);
+
+							if (matchingQuestion.length > 0) await optionsContainer.locator('input').click();
+						}
+					} else {
+						if (data.options.manualMode) {
+							terminalTimer(data.options.questionTimer);
+							await delay(data.options.questionTimer * 1000);
+
+							for (let i = 0; i < (await optionsContainers.count()); i++) {
+								const optionsContainer = optionsContainers.nth(i);
+
+								const optionHeading = (await optionsContainer.locator('label').innerText()).trim();
+								const isChecked = await optionsContainer.locator('input').isChecked();
+
+								isChecked
+									? optionsList.push({ optionHeading: optionHeading, isAnswer: true })
+									: optionsList.push({ optionHeading: optionHeading });
+							}
+
+							const optionQuestionObject: optionQuestion = {
+								heading: sentenceText,
+								options: optionsList,
+							};
+
+							saveOptionsQuestion(optionQuestionObject, questionType);
+						} else {
+							// Todo: NLP ?
+						}
 					}
-
-					console.log('tem Fieldset');
 				} else if (question.locator('select')) {
 					// Input Select (1º <option> is the label)
 					const sentence = question.locator('option').first();
@@ -250,36 +293,6 @@ async function jobsPageOperations(page: Page) {
 				}
 
 				//// ----
-
-				async function extractTextQuestion(textQuestionObject: textQuestion) {
-					const questionsPath = './storage/questions.json';
-
-					readFile(questionsPath, 'utf8', (err, data) => {
-						const json = JSON.parse(data);
-						const newJson = json.textQuestion.push(textQuestionObject);
-						writeFileSync(questionsPath, JSON.stringify(newJson), 'utf8');
-					});
-				}
-
-				async function extractOptionsQuestion(optionsQuestionObject: optionQuestion) {
-					const questionsPath = './storage/questions.json';
-
-					readFile(questionsPath, 'utf8', (err, data) => {
-						const json = JSON.parse(data);
-						const newJson = json.optionQuestion.push(optionsQuestionObject);
-						writeFileSync(questionsPath, JSON.stringify(newJson), 'utf8');
-					});
-				}
-
-				async function checkTextQuestion(heading: string, questionType: 'text' | 'textArea') {
-					const questionsPath = './storage/questions.json';
-					const questions = JSON.parse(readFileSync(questionsPath, 'utf8')).textQuestion;
-					const matchingQuestion: textQuestion[] = questions.filter((question: textQuestion) => {
-						question.type === questionType && question.heading === heading && question.answer !== '';
-					});
-
-					return matchingQuestion.length > 0 ? matchingQuestion[0] : null;
-				}
 			}
 
 			async function nextFormStep() {
@@ -288,7 +301,7 @@ async function jobsPageOperations(page: Page) {
 				const modalPageTitle = (await form.locator('h3').first().innerText()).trim();
 
 				// if (modalPageTitle === 'Perguntas adicionais' || modalPageTitle === 'Additional Questions') {
-				if (!['Perguntas adicionais', 'Additional Questions'].includes(modalPageTitle)) {
+				if (!['Perguntas adicionais', 'Additional Questions', 'Additional'].includes(modalPageTitle)) {
 					await form.locator('button').filter({ hasText: 'Next' }).click();
 					await nextFormStep();
 				}
@@ -309,6 +322,18 @@ function separatedLog(contents: string) {
 	console.log(contents);
 	console.log('/// --------------');
 }
+
+function terminalTimer(timeSeconds: number) {
+	let counter = timeSeconds;
+	console.log(`You have ${data.options.questionTimer} seconds to answer the question in the browser`);
+	const timer = setInterval(() => {
+		counter--;
+		process.stdout.write(`clock: ${counter}\r`);
+		if (counter === 0) clearInterval(timer);
+	}, 1000);
+}
+
+/// --------------
 
 function IdsToJSON(scrapedIds: string[]) {
 	// Read about stream and maybe implement it to speed up the performance in the future
