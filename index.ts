@@ -1,14 +1,8 @@
 import { Browser, BrowserContext, Locator, Page, chromium } from 'playwright';
-import { readFileSync, readFile, writeFileSync, statSync, unlinkSync, existsSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { parse } from 'yaml';
 import queryBuilder from './modules/linkedIn/urlQuery';
-import { option, optionQuestion, textQuestion } from './interfaces/question';
-import {
-	checkOptionsQuestion,
-	checkTextQuestion,
-	saveOptionsQuestion,
-	saveTextQuestion,
-} from './modules/linkedIn/questionOperations';
+
 import applyToJobs from './modules/linkedIn/jobPageOperations';
 
 let browser: Browser;
