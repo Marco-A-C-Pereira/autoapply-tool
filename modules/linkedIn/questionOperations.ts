@@ -1,5 +1,5 @@
 import { readFileSync, readFile, writeFileSync } from 'fs';
-import { optionQuestion, textQuestion } from '../interfaces/question';
+import { optionQuestion, textQuestion } from '../../interfaces/question';
 
 const questionsPath = './storage/questions.json';
 
