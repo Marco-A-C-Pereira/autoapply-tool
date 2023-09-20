@@ -3,7 +3,7 @@ interface question {
 }
 
 export interface option {
-	optionHeading: String;
+	optionHeading: string;
 	isAnswer?: boolean;
 }
 

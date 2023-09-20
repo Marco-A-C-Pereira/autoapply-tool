@@ -126,17 +126,9 @@ async function applyToJob() {
 
 			separatedLog(`Question: ${i + 1}`);
 
-			// TODO: Separate functions to avoid giant nesting
-
-			if (question.locator('label')) {
-				answerTextQuestion(question);
-			} else if (question.locator('fieldset')) {
-				answerRadioCheckboxQuestion(question);
-			} else if (question.locator('select')) {
-				answerSelectQuestion(question);
-			}
-
-			//// ----
+			if (question.locator('label')) await answerTextQuestion(question);
+			else if (question.locator('fieldset')) await answerRadioCheckboxQuestion(question);
+			else if (question.locator('select')) await answerSelectQuestion(question);
 		}
 	}
 }

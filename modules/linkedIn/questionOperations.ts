@@ -23,7 +23,10 @@ function saveOptionsQuestion(optionsQuestionObject: optionQuestion, questionType
 function checkTextQuestion(scrapedHeading: string, questionType: 'text' | 'textArea'): textQuestion | null {
 	const questions = JSON.parse(readFileSync(questionsPath, 'utf8')).textQuestion[questionType];
 	const matchingQuestion: textQuestion[] = questions.filter((question: textQuestion) => {
-		return question.heading === scrapedHeading && question.answer !== '';
+		const questionExists = question.heading === scrapedHeading;
+		const notEmpty = question.answer !== '' || undefined;
+
+		return questionExists && notEmpty;
 	});
 
 	return matchingQuestion.length > 0 ? matchingQuestion[0] : null;
@@ -35,9 +38,10 @@ function checkOptionsQuestion(
 ): optionQuestion | null {
 	const questions = JSON.parse(readFileSync(questionsPath, 'utf8')).optionQuestion[questionType];
 	const matchingQuestion: optionQuestion[] = questions.filter((question: optionQuestion) => {
-		return (
-			question.heading === scrapedHeading && question.options.filter((option) => option.isAnswer === true).length > 0
-		);
+		const questionExists = question.heading === scrapedHeading;
+		const hasAnswer = question.options.filter((option) => option.isAnswer === true).length > 0;
+
+		return questionExists && hasAnswer;
 	});
 
 	return matchingQuestion.length > 0 ? matchingQuestion[0] : null;
@@ -68,7 +72,6 @@ async function answerTextQuestion(question: Locator) {
 async function answerRadioCheckboxQuestion(question: Locator) {
 	const sentenceHeader = (await question.locator('legend').innerText()).trim();
 	const questionType = question.locator('input[type=radio]').isVisible() ? 'radio' : 'checkbox';
-	const optionsList: option[] = [];
 	const optionsContainers = question.locator('.fb-text-selectable__option');
 
 	const existingQuestion: optionQuestion = checkOptionsQuestion(sentenceHeader, questionType);
@@ -85,6 +88,7 @@ async function answerRadioCheckboxQuestion(question: Locator) {
 		}
 	} else {
 		await terminalCountdown();
+		const optionsList: option[] = [];
 
 		for (let i = 0; i < (await optionsContainers.count()); i++) {
 			const optionsContainer = optionsContainers.nth(i);
@@ -108,17 +112,47 @@ async function answerRadioCheckboxQuestion(question: Locator) {
 
 async function answerSelectQuestion(question: Locator) {
 	// Input Select (1º <option> is the label)
-	const sentenceHeader = (await question.locator('option').first().innerText()).trim();
-	const optionsList: option[] = [];
+	const sentenceHeader = (await question.locator('label').textContent()).trim();
+	const answers: Locator = question.locator('option');
 
 	const existingQuestion: optionQuestion = checkOptionsQuestion(sentenceHeader, 'select');
 	if (existingQuestion) {
-		const matchingQuestion = existingQuestion.options.filter(
-			(option) => option.optionHeading === sentenceHeader && option.isAnswer
-		);
+		// for (let i = 0; i < (await answers.count()); i++) {
+		// 	const currentAnswer = answers.nth(i);
+		// 	const currentAnswerText = await currentAnswer.innerText();
 
-		// await question.selectOption(matchingQuestion[0]);
+		// 	const filteredAnswer = existingQuestion.options.filter((option) => {
+		// 		const matchHeading = currentAnswerText === option.optionHeading;
+		// 		const isAnswer = option.isAnswer === true; // Probs will give out an error !!!!!!
+
+		// 		return matchHeading && isAnswer;
+		// 	});
+
+		// 	if (filteredAnswer.length > 0) return question.selectOption(filteredAnswer[0].optionHeading);
+		// }
+
+		const filteredAnswer = existingQuestion.options.find((option) => option.isAnswer === true);
+		question.locator('select', { hasText: filteredAnswer.optionHeading }).click();
 	} else {
+		await terminalCountdown();
+		const optionsList: option[] = [];
+
+		for (let i = 0; i < (await answers.count()); i++) {
+			const currentAnswer = answers.nth(i);
+			const currentAnswerText = await currentAnswer.innerText();
+
+			const isSelected = question.getAttribute('selected') !== null;
+			isSelected
+				? optionsList.push({ optionHeading: currentAnswerText, isAnswer: true })
+				: optionsList.push({ optionHeading: currentAnswerText });
+		}
+
+		const optionQuestionObject: optionQuestion = {
+			heading: sentenceHeader,
+			options: optionsList,
+		};
+
+		saveOptionsQuestion(optionQuestionObject, 'select');
 	}
 }
 
