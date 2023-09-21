@@ -2,11 +2,12 @@ import { readFileSync, readFile, writeFileSync, statSync, unlinkSync, existsSync
 
 import { Locator, Page } from 'playwright';
 import { treatQuestion } from './questionOperations';
+import { IApplication } from '../../interfaces/application';
 
 let page: Page;
 
 const sessionVisitedIds: string[] = []; // Implemented this is used for the 24h rule
-const sessionVisitedJobs: any = []; // TODO: Scrape all info to store in a separate file for history purposes
+const sessionAppliedJobs: IApplication[] = []; // TODO: Scrape all info to store in a separate file for history purposes
 
 const forcedDelay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -19,6 +20,7 @@ export default async function applyToJobs(jobsPage: Page) {
 	await extractPage();
 
 	storeVisitedIds(sessionVisitedIds);
+	storeJobs(sessionAppliedJobs);
 	console.log('Job done boss');
 }
 
@@ -26,7 +28,7 @@ async function extractPage(): Promise<void> {
 	const data = await extractJob();
 
 	if (!data) return await paginate();
-	sessionVisitedJobs.push(data);
+	sessionAppliedJobs.push(data);
 	sessionVisitedIds.push(data.JobId);
 
 	return extractPage();
@@ -51,11 +53,12 @@ async function extractJob(): Promise<any> {
 			await jobCard.click();
 			const successfulApply = await applyToJob();
 
-			const JobData: any = {
+			const JobData: IApplication = {
 				id: await jobCard.getAttribute('data-job-id'),
 				title: await jobCard.getByRole('link').innerText(),
 				company: await jobCard.locator('.job-card-container__primary-description').innerText(),
-				status: successfulApply, // Gonna transform this in a object for more detailing
+				applied: successfulApply,
+				creationDate: new Date(),
 			};
 
 			await removeFromDom(jobCard);
@@ -188,8 +191,9 @@ function storeVisitedIds(sessionVisitedIds: string[]) {
 
 	if (IDQuantity < 1) return console.log('You are all caught up: ' + IDQuantity);
 
-	if (!existsSync('./storage/visitedID.json'))
+	if (!existsSync('./storage/visitedID.json')) {
 		return writeFileSync(IdStoragePath, JSON.stringify(sessionVisitedIds), 'utf8');
+	}
 
 	const { birthtime } = statSync(IdStoragePath);
 	const fileTime: number = birthtime.getTime();
@@ -206,6 +210,29 @@ function storeVisitedIds(sessionVisitedIds: string[]) {
 	}
 }
 
+function storeJobs(sessionAppliedJobs: IApplication[]) {
+	const jobsStoragePath = './storage/appliedJobs.json';
+	const deepSessionAppliedJobs: IApplication[] = JSON.parse(JSON.stringify(sessionAppliedJobs));
+
+	if (sessionAppliedJobs.length < 1) return "Didn't apply in any job";
+	const storedApplications: IApplication[] = JSON.parse(readFileSync(jobsStoragePath, 'utf8'));
+
+	// FIXME: This is will give out performance problems ! Maybe using a temporary file 24h will help ?
+	const newApplications = storedApplications.map((storedApplication) => {
+		const matchingJob = sessionAppliedJobs.find((appliedJob) => storedApplication.id === appliedJob.id);
+		if (!matchingJob || storedApplication.applied === true || matchingJob.applied === false) return storedApplication;
+
+		delete deepSessionAppliedJobs[sessionAppliedJobs.indexOf(matchingJob)];
+		return matchingJob;
+	});
+
+	deepSessionAppliedJobs.map((application: IApplication | undefined) => {
+		if (application !== undefined) newApplications.unshift(application);
+	});
+
+	writeFileSync(jobsStoragePath, JSON.stringify(newApplications), 'utf8');
+}
+
 function separatedLog(contents: string) {
 	console.log('/// --------------');
 	console.log(contents);
@@ -213,6 +240,5 @@ function separatedLog(contents: string) {
 }
 
 function randomRange(min: number, max: number) {
-	// return parseFloat((Math.random() * (max - min) + min).toFixed(5));
 	return parseFloat((Math.random() * (max - min) + min).toFixed(5)) * 1000;
 }

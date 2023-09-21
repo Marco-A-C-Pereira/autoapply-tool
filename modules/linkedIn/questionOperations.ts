@@ -62,7 +62,7 @@ async function answerTextQuestion(question: Locator) {
 		return true;
 	}
 
-	await terminalCountdown(); // TODO:Make thi optional in the config for "fast mode" / Just scraping for latter
+	await terminalCountdown(); // TODO:Make this optional in the config for "fast mode" / Just scraping for latter
 	const textQuestionObject: textQuestion = {
 		heading: sentenceHeader,
 		answer: (await textInput.inputValue()).trim(),
