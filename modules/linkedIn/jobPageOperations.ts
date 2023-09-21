@@ -1,7 +1,7 @@
 import { readFileSync, readFile, writeFileSync, statSync, unlinkSync, existsSync } from 'fs';
 
 import { Locator, Page } from 'playwright';
-import { answerRadioCheckboxQuestion, answerSelectQuestion, answerTextQuestion } from './questionOperations';
+import { treatQuestion } from './questionOperations';
 
 let page: Page;
 
@@ -40,11 +40,6 @@ async function extractJob(): Promise<any> {
 			await jobCard.scrollIntoViewIfNeeded();
 
 			// FIXME: JobData Interface
-			const JobData: any = {
-				id: await jobCard.getAttribute('data-job-id'),
-				title: await jobCard.getByRole('link').innerText(),
-				company: await jobCard.locator('.job-card-container__primary-description').innerText(),
-			};
 
 			if (await shouldBeRemoved(jobCard)) {
 				await removeFromDom(jobCard);
@@ -54,7 +49,14 @@ async function extractJob(): Promise<any> {
 			await forcedDelay(randomRange(1, 2));
 
 			await jobCard.click();
-			// await applyToJob();
+			const successfulApply = await applyToJob();
+
+			const JobData: any = {
+				id: await jobCard.getAttribute('data-job-id'),
+				title: await jobCard.getByRole('link').innerText(),
+				company: await jobCard.locator('.job-card-container__primary-description').innerText(),
+				status: successfulApply, // Gonna transform this in a object for more detailing
+			};
 
 			await removeFromDom(jobCard);
 			return JobData;
@@ -112,9 +114,11 @@ async function removeFromDom(container: Locator): Promise<void> {
 async function applyToJob() {
 	const jobDescriptionContainer = page.locator('.jobs-search__job-details--container');
 	await forcedDelay(randomRange(3, 5));
-	await jobDescriptionContainer.getByRole('button', { name: 'Easy Apply' }).click(); // Try role grab kek
+	await jobDescriptionContainer.getByRole('button', { name: 'Easy Apply' }).click();
+	const answerStatus: boolean[] = [];
 
 	// Insert await for modal !
+	// FIXME:Is this nesting necessary ?
 	if ((await page.waitForSelector('.jobs-easy-apply-modal')).isVisible()) {
 		const modal = page.locator('.jobs-easy-apply-modal');
 
@@ -126,10 +130,17 @@ async function applyToJob() {
 
 			separatedLog(`Question: ${i + 1}`);
 
-			if (question.locator('label')) await answerTextQuestion(question);
-			else if (question.locator('fieldset')) await answerRadioCheckboxQuestion(question);
-			else if (question.locator('select')) await answerSelectQuestion(question);
+			answerStatus.push(await treatQuestion(question));
 		}
+
+		const problemWithQuestion = answerStatus.find((status) => status === false);
+		if (problemWithQuestion) {
+			await cancelApply(modal);
+			return false;
+		}
+
+		finishApply(modal);
+		return true;
 	}
 }
 
@@ -150,6 +161,21 @@ async function nextFormStep(modal: Locator) {
 		await form.locator('button').filter({ hasText: 'Next' }).click();
 		await nextFormStep(modal);
 	}
+}
+
+async function finishApply(modal: Locator) {
+	await modal.locator('button').filter({ hasText: 'Review' }).click();
+	await modal.locator('input[type=checkbox]').click();
+	await modal.locator('button').filter({ hasText: 'Submit application' }).click();
+}
+
+async function cancelApply(applyModal: Locator) {
+	applyModal.locator('type="cancel-icon"').click();
+
+	(await page.waitForSelector('[data-test-modal-id="data-test-easy-apply-discard-confirmation"]')).isVisible(); // FIXME: Can easily break
+	const exitModal = page.locator('[data-test-modal-id="data-test-easy-apply-discard-confirmation"]');
+
+	await exitModal.locator('button').filter({ hasText: 'Discard' }).click(); // Because of the annoying reminder
 }
 
 function storeVisitedIds(sessionVisitedIds: string[]) {

@@ -51,22 +51,26 @@ async function answerTextQuestion(question: Locator) {
 	const sentenceHeader = (await question.locator('label').innerText()).trim();
 
 	const questionType = question.locator('input[type=text]').isVisible() ? 'text' : 'textArea';
-	const textInput: Locator =
-		questionType === 'text' ? question.locator('input[type=text]') : question.locator('textarea');
+	const textInput = questionType === 'text' ? question.locator('input[type=text]') : question.locator('textarea');
 
 	const existingQuestion: textQuestion = checkTextQuestion(sentenceHeader, questionType);
 
-	if (existingQuestion) return textInput.type(existingQuestion.answer, { delay: 100 });
-	await terminalCountdown();
+	const isAlreadyFilled = (await textInput.inputValue()) !== (undefined || null || '');
+	if (isAlreadyFilled) return true;
+	if (existingQuestion) {
+		textInput.type(existingQuestion.answer, { delay: 100 }); // FIXME: Sound like redundancy but when I implement NPL this will be useful in a refactor
+		return true;
+	}
 
+	await terminalCountdown(); // TODO:Make thi optional in the config for "fast mode" / Just scraping for latter
 	const textQuestionObject: textQuestion = {
 		heading: sentenceHeader,
 		answer: (await textInput.inputValue()).trim(),
 	};
 
-	console.log(textQuestionObject);
-
 	saveTextQuestion(textQuestionObject, questionType);
+
+	return textQuestionObject.answer !== (undefined || null || '') ? true : false;
 }
 
 async function answerRadioCheckboxQuestion(question: Locator) {
@@ -74,40 +78,48 @@ async function answerRadioCheckboxQuestion(question: Locator) {
 	const questionType = question.locator('input[type=radio]').isVisible() ? 'radio' : 'checkbox';
 	const optionsContainers = question.locator('.fb-text-selectable__option');
 
+	for (const optionsContainer of await optionsContainers.all()) {
+		const isChecked = await optionsContainer.locator('input').isChecked();
+
+		if (isChecked) return true;
+	}
+
 	const existingQuestion: optionQuestion = checkOptionsQuestion(sentenceHeader, questionType);
 	if (existingQuestion) {
-		for (let i = 0; i < (await optionsContainers.count()); i++) {
-			const optionsContainer = optionsContainers.nth(i);
-
+		// TODO: Optimize with hasText ?
+		for (const optionsContainer of await optionsContainers.all()) {
 			const optionHeading = (await optionsContainer.locator('label').innerText()).trim();
-			const matchingQuestion = existingQuestion.options.filter(
+			const matchingQuestion = existingQuestion.options.find(
 				(option) => option.optionHeading === optionHeading && option.isAnswer
 			);
 
-			if (matchingQuestion.length > 0) await optionsContainer.locator('input').click();
-		}
-	} else {
-		await terminalCountdown();
-		const optionsList: option[] = [];
-
-		for (let i = 0; i < (await optionsContainers.count()); i++) {
-			const optionsContainer = optionsContainers.nth(i);
-
-			const optionHeading = (await optionsContainer.locator('label').innerText()).trim();
-			const isChecked = await optionsContainer.locator('input').isChecked();
-
-			isChecked
-				? optionsList.push({ optionHeading: optionHeading, isAnswer: true })
-				: optionsList.push({ optionHeading: optionHeading });
+			if (matchingQuestion) await optionsContainer.locator('input').check();
 		}
 
-		const optionQuestionObject: optionQuestion = {
-			heading: sentenceHeader,
-			options: optionsList,
-		};
-
-		saveOptionsQuestion(optionQuestionObject, questionType);
+		return true;
 	}
+
+	await terminalCountdown();
+	const optionsList: option[] = [];
+
+	for (const optionsContainer of await optionsContainers.all()) {
+		const optionHeading = (await optionsContainer.locator('label').innerText()).trim();
+		const isChecked = await optionsContainer.locator('input').isChecked();
+
+		isChecked
+			? optionsList.push({ optionHeading: optionHeading, isAnswer: true })
+			: optionsList.push({ optionHeading: optionHeading });
+	}
+
+	const optionQuestionObject: optionQuestion = {
+		heading: sentenceHeader,
+		options: optionsList,
+	};
+
+	saveOptionsQuestion(optionQuestionObject, questionType);
+
+	const wasAnswered = optionQuestionObject.options.find((option) => option.isAnswer === true);
+	return wasAnswered ? true : false;
 }
 
 async function answerSelectQuestion(question: Locator) {
@@ -117,46 +129,48 @@ async function answerSelectQuestion(question: Locator) {
 
 	const existingQuestion: optionQuestion = checkOptionsQuestion(sentenceHeader, 'select');
 	if (existingQuestion) {
-		// for (let i = 0; i < (await answers.count()); i++) {
-		// 	const currentAnswer = answers.nth(i);
-		// 	const currentAnswerText = await currentAnswer.innerText();
-
-		// 	const filteredAnswer = existingQuestion.options.filter((option) => {
-		// 		const matchHeading = currentAnswerText === option.optionHeading;
-		// 		const isAnswer = option.isAnswer === true; // Probs will give out an error !!!!!!
-
-		// 		return matchHeading && isAnswer;
-		// 	});
-
-		// 	if (filteredAnswer.length > 0) return question.selectOption(filteredAnswer[0].optionHeading);
-		// }
-
 		const filteredAnswer = existingQuestion.options.find((option) => option.isAnswer === true);
 		question.locator('select', { hasText: filteredAnswer.optionHeading }).click();
-	} else {
-		await terminalCountdown();
-		const optionsList: option[] = [];
 
-		for (let i = 0; i < (await answers.count()); i++) {
-			const currentAnswer = answers.nth(i);
-			const currentAnswerText = await currentAnswer.innerText();
-
-			const isSelected = question.getAttribute('selected') !== null;
-			isSelected
-				? optionsList.push({ optionHeading: currentAnswerText, isAnswer: true })
-				: optionsList.push({ optionHeading: currentAnswerText });
-		}
-
-		const optionQuestionObject: optionQuestion = {
-			heading: sentenceHeader,
-			options: optionsList,
-		};
-
-		saveOptionsQuestion(optionQuestionObject, 'select');
+		return true;
 	}
+
+	await terminalCountdown();
+	const optionsList: option[] = [];
+
+	for (const currentAnswer of await answers.all()) {
+		const currentAnswerText = await currentAnswer.innerText();
+
+		// FIXME: Probably gonna give out an error !!! I Don't see it when selecting manually in the webpage
+		const isSelected = question.getAttribute('selected') !== null;
+		//
+		isSelected
+			? optionsList.push({ optionHeading: currentAnswerText, isAnswer: true })
+			: optionsList.push({ optionHeading: currentAnswerText });
+	}
+
+	const optionQuestionObject: optionQuestion = {
+		heading: sentenceHeader,
+		options: optionsList,
+	};
+
+	saveOptionsQuestion(optionQuestionObject, 'select');
+
+	const wasAnswered = optionQuestionObject.options.find((option) => option.isAnswer === true);
+	return wasAnswered ? true : false;
 }
 
-export { answerTextQuestion, answerRadioCheckboxQuestion, answerSelectQuestion };
+async function treatQuestion(question: Locator) {
+	let wasSuccessful: boolean;
+
+	if (question.locator('label')) wasSuccessful = await answerTextQuestion(question);
+	else if (question.locator('fieldset')) wasSuccessful = await answerRadioCheckboxQuestion(question);
+	else if (question.locator('select')) wasSuccessful = await answerSelectQuestion(question);
+
+	return wasSuccessful;
+}
+
+export { treatQuestion };
 
 async function terminalCountdown() {
 	let counter = questionTimer;
