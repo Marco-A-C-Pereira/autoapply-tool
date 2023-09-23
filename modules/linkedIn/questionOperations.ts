@@ -28,7 +28,7 @@ function saveOptionsQuestion(optionsQuestionObject: optionQuestion, questionType
 
 	if (questionAlreadyExists) return;
 
-	json.optionQuestionQuestion[questionType].push(optionsQuestionObject);
+	json.optionQuestion[questionType].push(optionsQuestionObject);
 	writeFileSync(questionsPath, JSON.stringify(json), 'utf8');
 }
 
@@ -143,12 +143,11 @@ async function answerRadioCheckboxQuestion(question: Locator) {
 }
 
 async function answerSelectQuestion(question: Locator) {
-	const sentenceHeader = (await question.locator('label').textContent()).trim();
+	const sentenceHeader = (await question.locator('label').locator('span').first().innerText()).trim();
 	const answers: Locator = question.locator('option');
+	const defaultAnswerText = await question.locator('option').first().innerText();
 
-	console.log('Its me selectquestion');
 	const existingQuestion: optionQuestion | null = checkOptionsQuestion(sentenceHeader, 'select');
-	console.log('Sentencequestion Result: ' + existingQuestion);
 
 	if (existingQuestion) {
 		const filteredAnswer = existingQuestion.options.find((option) => option.isAnswer === true);
@@ -162,10 +161,13 @@ async function answerSelectQuestion(question: Locator) {
 	const optionsList: option[] = [];
 
 	for (const currentAnswer of await answers.all()) {
-		const currentAnswerText = await currentAnswer.innerText();
+		const currentAnswerText = (await currentAnswer.innerText()).trim();
+		const selectValue = await question.locator('select').inputValue();
+
+		console.log(selectValue);
 
 		// FIXME: Probably gonna give out an error !!! I Don't see it when selecting manually in the webpage
-		const isSelected = question.getAttribute('selected') !== null;
+		const isSelected = currentAnswerText !== defaultAnswerText && currentAnswerText === selectValue;
 		//
 		isSelected
 			? optionsList.push({ optionHeading: currentAnswerText, isAnswer: true })
@@ -184,13 +186,20 @@ async function answerSelectQuestion(question: Locator) {
 }
 
 async function treatQuestion(question: Locator) {
-	let wasSuccessful: boolean;
+	try {
+		let wasSuccessful: boolean = false;
 
-	if (question.locator('label')) wasSuccessful = await answerTextQuestion(question);
-	else if (question.locator('fieldset')) wasSuccessful = await answerRadioCheckboxQuestion(question);
-	else if (question.locator('select')) wasSuccessful = await answerSelectQuestion(question);
+		if (question.locator('input[type=text]') || question.locator('textarea'))
+			wasSuccessful = await answerTextQuestion(question);
+		else if (question.locator('select')) wasSuccessful = await answerSelectQuestion(question);
+		else if (question.locator('fieldset')) wasSuccessful = await answerRadioCheckboxQuestion(question);
 
-	return wasSuccessful;
+		return wasSuccessful;
+	} catch (err) {
+		console.log(err);
+
+		return false;
+	}
 }
 
 export { treatQuestion };

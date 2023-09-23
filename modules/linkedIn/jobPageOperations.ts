@@ -24,56 +24,53 @@ export default async function applyToJobs(jobsPage: Page) {
 
 	storeVisitedIds(sessionVisitedIds);
 	storeJobs(sessionAppliedJobs);
+
 	console.log('Job done boss');
 }
 
 async function extractPage(): Promise<void> {
-	const data = await extractJob();
+	const application: IApplication | null = await extractJob();
 
-	if (!data) return await paginate();
-	sessionAppliedJobs.push(data);
-	sessionVisitedIds.push(data.JobId);
+	if (application) {
+		// TODO: Make a data storage function for stats
+		sessionAppliedJobs.push(application);
+		sessionVisitedIds.push(application.id);
+	}
+
+	const noMoreCards = (await page.locator('.job-card-container').count()) === 0;
+	if (!application && noMoreCards && (await shouldPaginate()) === false) return;
 
 	return extractPage();
 }
 
-async function extractJob(): Promise<any> {
-	try {
-		await humanLikeDelay(1, 2);
-		if (await page.waitForSelector('.job-card-container', { timeout: 4000 })) {
-			const jobCard: Locator = page.locator('.job-card-container').first();
-			await jobCard.scrollIntoViewIfNeeded();
+async function extractJob(): Promise<IApplication | null> {
+	if ((await page.locator('.job-card-container').count()) === 0) return null;
 
-			if (await shouldBeRemoved(jobCard)) {
-				await removeFromDom(jobCard);
-				return await extractJob();
-			}
+	const jobCard: Locator = page.locator('.job-card-container').first();
+	await jobCard.waitFor({ state: 'visible', timeout: 5000 });
+	await jobCard.scrollIntoViewIfNeeded();
 
-			await humanLikeDelay(1, 2);
+	await humanLikeDelay(1, 2);
+	const isBlacklisted = await blacklist(jobCard);
+	if (isBlacklisted) return null;
 
-			await jobCard.click();
-			const successfulApply = await applyToJob();
+	await humanLikeDelay(1, 2);
+	await jobCard.click();
+	const successfulApply = await applyToJob();
 
-			const JobData: IApplication = {
-				id: await jobCard.getAttribute('data-job-id'),
-				title: await jobCard.getByRole('link').innerText(),
-				company: await jobCard.locator('.job-card-container__primary-description').innerText(),
-				applied: successfulApply,
-				creationDate: new Date(),
-			};
+	const JobData: IApplication = {
+		id: await jobCard.getAttribute('data-job-id'),
+		title: await jobCard.getByRole('link').innerText(),
+		company: await jobCard.locator('.job-card-container__primary-description').innerText(),
+		applied: successfulApply,
+		creationDate: new Date(),
+	};
 
-			await removeFromDom(jobCard);
-			return JobData;
-		}
-	} catch (err) {
-		console.log(err);
-		// FIXME: If the is any erros in this part it crashes the application so I need to remove the offender DOM item and try again !
-
-		return null;
-	}
+	await removeFromDom(jobCard);
+	return JobData;
 }
 
-async function shouldBeRemoved(jobCard: Locator): Promise<boolean> {
+async function blacklist(jobCard: Locator) {
 	// const hasVisited = visitedIDs.includes(JobId);
 
 	// FIXME: Using temporary values
@@ -88,11 +85,24 @@ async function shouldBeRemoved(jobCard: Locator): Promise<boolean> {
 	// const matchJobTitle = false; // todo
 
 	const conditionsArray: boolean[] = [isPromoted, isApplied, hasVisited, haveBlacklistedTitle];
+	const isBlackListed = conditionsArray.includes(true);
 
-	return conditionsArray.includes(true);
+	if (isBlackListed === false) return false;
+
+	await removeFromDom(jobCard);
+	return true;
 
 	async function evaluateJobTitle(): Promise<boolean> {
-		const jobCardTitleWords = (await jobCard.getByRole('link').innerText()).trim().split(' ');
+		const replaceSymbols = /[,{}[\]]/g;
+		const joinFrontAndBack = /\b(Back|Front) End\b/gi;
+		const joinFullstack = /\bFull Stack\b/gi;
+
+		const jobCardTitleWords = (await jobCard.getByRole('link').innerText())
+			.trim()
+			.replace(replaceSymbols, '')
+			.replace(joinFrontAndBack, (match, group1) => group1 + 'end')
+			.replace(joinFullstack, 'Fullstack')
+			.split(' ');
 
 		return jobCardTitleWords.some((titleWord) =>
 			blacklistedJobTitles.map((jobTitle) => jobTitle.toLowerCase()).includes(titleWord.toLowerCase())
@@ -100,24 +110,24 @@ async function shouldBeRemoved(jobCard: Locator): Promise<boolean> {
 	}
 }
 
-async function paginate(): Promise<void> {
-	try {
-		if (await page.waitForSelector('[class*="pagination__page-state"]', { timeout: 5000 })) {
-			const pageIndicatorText = (await page.locator('[class*="pagination__page-state"]').innerText()).trim();
-			const pageNumeration = pageIndicatorText.match(/\d+/g);
+async function shouldPaginate() {
+	const noPaginationExists = await page.locator('[class*="pagination__page-state"]').isHidden();
 
-			const currPage = Number(pageNumeration[0]);
-			const lastPage = Number(pageNumeration[1]);
-			const hasMorePages = currPage < lastPage;
+	if (noPaginationExists) return false;
 
-			if (!hasMorePages) return;
+	const pageIndicatorText = (await page.locator('[class*="pagination__page-state"]').innerText()).trim();
+	const pageNumeration = pageIndicatorText.match(/\d+/g);
 
-			page.getByLabel(`Page ${currPage + 1}`).click();
-			return extractPage();
-		}
-	} catch (err) {
-		return;
-	}
+	const currPage = Number(pageNumeration[0]);
+	const lastPage = Number(pageNumeration[1]);
+	const hasMorePages = currPage < lastPage;
+
+	if (!hasMorePages) return false;
+
+	await page.getByLabel(`Page ${currPage + 1}`).click();
+	await page.waitForSelector('.job-card-container', { timeout: 10000 });
+
+	return true;
 }
 
 async function removeFromDom(container: Locator): Promise<void> {
@@ -184,9 +194,11 @@ async function nextFormStep(modal: Locator): Promise<void> {
 }
 
 async function submitWithoutQuestions(modal: Locator): Promise<boolean> {
+	const noQuestions = (await modal.locator('.jobs-easy-apply-form-section__grouping').count()) === 0;
 	return (
-		(await modal.locator('button').filter({ hasText: 'Submit application' }).isVisible()) ||
-		(await modal.locator('button').filter({ hasText: 'Review' }).isVisible())
+		noQuestions &&
+		((await modal.locator('button').filter({ hasText: 'Submit application' }).isVisible()) ||
+			(await modal.locator('button').filter({ hasText: 'Review' }).isVisible()))
 	);
 }
 
@@ -207,9 +219,10 @@ async function finishApply(modal: Locator) {
 		const submitButtonVisible = await modal.locator('button').filter({ hasText: 'Submit application' }).isVisible();
 		if (submitButtonVisible) await modal.locator('button').filter({ hasText: 'Submit application' }).click();
 
-		// Causing crash ????????
 		const postApplyModal = await page.locator('div[aria-labelledby="post-apply-modal"]');
 		await postApplyModal.locator('button[aria-label="Dismiss"]').click();
+
+		await page.waitForSelector('.job-card-container', { timeout: 10000 });
 
 		return false; // No problem with the apply process
 	} catch (err) {

@@ -36,9 +36,6 @@ const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(reso
 
 	await goToJobs(page);
 	await applyToJobs(page);
-	// await jobsPageOperations(page);
-
-	/// --------------
 
 	console.timeEnd('AppStart');
 	await delay(20000);
