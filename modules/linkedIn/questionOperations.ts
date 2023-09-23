@@ -10,26 +10,39 @@ const { manualMode, questionTimer } = parse(readFileSync('config.yaml').toString
 
 function saveTextQuestion(textQuestionObject: textQuestion, questionType: 'text' | 'textArea') {
 	const json = JSON.parse(readFileSync(questionsPath, 'utf-8'));
+	const questionAlreadyExists: textQuestion | undefined = json.textQuestion[questionType].find(
+		(question: textQuestion) => textQuestionObject.heading === question.heading
+	);
+
+	if (questionAlreadyExists) return;
+
 	json.textQuestion[questionType].push(textQuestionObject);
 	writeFileSync(questionsPath, JSON.stringify(json), 'utf8');
 }
 
 function saveOptionsQuestion(optionsQuestionObject: optionQuestion, questionType: 'radio' | 'checkbox' | 'select') {
 	const json = JSON.parse(readFileSync(questionsPath, 'utf-8'));
+	const questionAlreadyExists: optionQuestion | undefined = json.optionQuestion[questionType].find(
+		(question: optionQuestion) => optionsQuestionObject.heading === question.heading
+	);
+
+	if (questionAlreadyExists) return;
+
 	json.optionQuestionQuestion[questionType].push(optionsQuestionObject);
 	writeFileSync(questionsPath, JSON.stringify(json), 'utf8');
 }
 
 function checkTextQuestion(scrapedHeading: string, questionType: 'text' | 'textArea'): textQuestion | null {
-	const questions = JSON.parse(readFileSync(questionsPath, 'utf8')).textQuestion[questionType];
-	const matchingQuestion: textQuestion[] = questions.filter((question: textQuestion) => {
+	const questions: textQuestion[] = JSON.parse(readFileSync(questionsPath, 'utf8')).textQuestion[questionType];
+
+	const matchingQuestion: textQuestion = questions.find((question: textQuestion) => {
 		const questionExists = question.heading === scrapedHeading;
 		const notEmpty = question.answer !== '' || undefined;
 
 		return questionExists && notEmpty;
 	});
 
-	return matchingQuestion.length > 0 ? matchingQuestion[0] : null;
+	return matchingQuestion ? matchingQuestion : null;
 }
 
 function checkOptionsQuestion(
@@ -51,21 +64,27 @@ async function answerTextQuestion(question: Locator) {
 	const sentenceHeader = (await question.locator('label').innerText()).trim();
 
 	const questionType = question.locator('input[type=text]').isVisible() ? 'text' : 'textArea';
-	const textInput = questionType === 'text' ? question.locator('input[type=text]') : question.locator('textarea');
+	const textInputField = questionType === 'text' ? question.locator('input[type=text]') : question.locator('textarea');
+	const textInputValue = await textInputField.inputValue();
 
-	const existingQuestion: textQuestion = checkTextQuestion(sentenceHeader, questionType);
+	const existingQuestion: textQuestion | null = checkTextQuestion(sentenceHeader, questionType);
 
-	const isAlreadyFilled = (await textInput.inputValue()) !== (undefined || null || '');
+	const isAlreadyFilled = textInputValue !== (undefined || null || '');
+	const isZero = textInputValue == '0';
+
+	if (isZero) return false;
 	if (isAlreadyFilled) return true;
 	if (existingQuestion) {
-		textInput.type(existingQuestion.answer, { delay: 100 }); // FIXME: Sound like redundancy but when I implement NPL this will be useful in a refactor
+		await textInputField.type(existingQuestion.answer, { delay: 100 });
 		return true;
 	}
 
+	separatedLog(sentenceHeader);
 	await terminalCountdown(); // TODO:Make this optional in the config for "fast mode" / Just scraping for latter
+
 	const textQuestionObject: textQuestion = {
 		heading: sentenceHeader,
-		answer: (await textInput.inputValue()).trim(),
+		answer: (await textInputField.inputValue()).trim(),
 	};
 
 	saveTextQuestion(textQuestionObject, questionType);
@@ -99,6 +118,7 @@ async function answerRadioCheckboxQuestion(question: Locator) {
 		return true;
 	}
 
+	separatedLog(sentenceHeader);
 	await terminalCountdown();
 	const optionsList: option[] = [];
 
@@ -123,11 +143,13 @@ async function answerRadioCheckboxQuestion(question: Locator) {
 }
 
 async function answerSelectQuestion(question: Locator) {
-	// Input Select (1º <option> is the label)
 	const sentenceHeader = (await question.locator('label').textContent()).trim();
 	const answers: Locator = question.locator('option');
 
-	const existingQuestion: optionQuestion = checkOptionsQuestion(sentenceHeader, 'select');
+	console.log('Its me selectquestion');
+	const existingQuestion: optionQuestion | null = checkOptionsQuestion(sentenceHeader, 'select');
+	console.log('Sentencequestion Result: ' + existingQuestion);
+
 	if (existingQuestion) {
 		const filteredAnswer = existingQuestion.options.find((option) => option.isAnswer === true);
 		question.locator('select', { hasText: filteredAnswer.optionHeading }).click();
@@ -135,6 +157,7 @@ async function answerSelectQuestion(question: Locator) {
 		return true;
 	}
 
+	separatedLog(sentenceHeader);
 	await terminalCountdown();
 	const optionsList: option[] = [];
 
@@ -181,4 +204,10 @@ async function terminalCountdown() {
 		if (counter === 0) clearInterval(timer);
 	}, 1000);
 	await forcedDelay(questionTimer * 1000); // Possible Bug
+}
+
+function separatedLog(contents: string) {
+	console.log('/// --------------');
+	console.log(contents);
+	console.log('/// --------------');
 }

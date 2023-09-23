@@ -3,13 +3,16 @@ import { readFileSync, readFile, writeFileSync, statSync, unlinkSync, existsSync
 import { Locator, Page } from 'playwright';
 import { treatQuestion } from './questionOperations';
 import { IApplication } from '../../interfaces/application';
+import { parse } from 'yaml';
 
 let page: Page;
 
+const { blacklistedJobTitles }: { blacklistedJobTitles: string[] } = parse(
+	readFileSync('config.yaml').toString()
+).jobSearch;
+
 const sessionVisitedIds: string[] = []; // Implemented this is used for the 24h rule
 const sessionAppliedJobs: IApplication[] = []; // TODO: Scrape all info to store in a separate file for history purposes
-
-const forcedDelay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export default async function applyToJobs(jobsPage: Page) {
 	page = jobsPage;
@@ -36,19 +39,17 @@ async function extractPage(): Promise<void> {
 
 async function extractJob(): Promise<any> {
 	try {
-		await forcedDelay(randomRange(1, 2));
+		await humanLikeDelay(1, 2);
 		if (await page.waitForSelector('.job-card-container', { timeout: 4000 })) {
 			const jobCard: Locator = page.locator('.job-card-container').first();
 			await jobCard.scrollIntoViewIfNeeded();
-
-			// FIXME: JobData Interface
 
 			if (await shouldBeRemoved(jobCard)) {
 				await removeFromDom(jobCard);
 				return await extractJob();
 			}
 
-			await forcedDelay(randomRange(1, 2));
+			await humanLikeDelay(1, 2);
 
 			await jobCard.click();
 			const successfulApply = await applyToJob();
@@ -65,6 +66,9 @@ async function extractJob(): Promise<any> {
 			return JobData;
 		}
 	} catch (err) {
+		console.log(err);
+		// FIXME: If the is any erros in this part it crashes the application so I need to remove the offender DOM item and try again !
+
 		return null;
 	}
 }
@@ -76,16 +80,24 @@ async function shouldBeRemoved(jobCard: Locator): Promise<boolean> {
 
 	const isPromoted = (await jobCard.innerText()).includes('Promoted');
 	const isApplied = (await jobCard.innerText()).includes('Applied');
+	const haveBlacklistedTitle = await evaluateJobTitle();
 	const hasVisited = false; // temporary
 
 	// const matchCompany = false; // todo
 	// const isCompanyBlacklisted = false; // Todo
 	// const matchJobTitle = false; // todo
-	// const isJobTitleBlacklisted = false; //todo
 
-	const conditionsArray: boolean[] = [isPromoted, isApplied, hasVisited];
+	const conditionsArray: boolean[] = [isPromoted, isApplied, hasVisited, haveBlacklistedTitle];
 
 	return conditionsArray.includes(true);
+
+	async function evaluateJobTitle(): Promise<boolean> {
+		const jobCardTitleWords = (await jobCard.getByRole('link').innerText()).trim().split(' ');
+
+		return jobCardTitleWords.some((titleWord) =>
+			blacklistedJobTitles.map((jobTitle) => jobTitle.toLowerCase()).includes(titleWord.toLowerCase())
+		);
+	}
 }
 
 async function paginate(): Promise<void> {
@@ -116,69 +128,105 @@ async function removeFromDom(container: Locator): Promise<void> {
 
 async function applyToJob() {
 	const jobDescriptionContainer = page.locator('.jobs-search__job-details--container');
-	await forcedDelay(randomRange(3, 5));
+	await humanLikeDelay(3, 5);
 	await jobDescriptionContainer.getByRole('button', { name: 'Easy Apply' }).click();
 	const answerStatus: boolean[] = [];
 
-	// Insert await for modal !
 	// FIXME:Is this nesting necessary ?
 	if ((await page.waitForSelector('.jobs-easy-apply-modal')).isVisible()) {
 		const modal = page.locator('.jobs-easy-apply-modal');
 
 		await nextFormStep(modal);
+		if (await submitWithoutQuestions(modal)) return finishApply(modal); // a bit clunky but it should work
 
 		const allQuestions = modal.locator('.jobs-easy-apply-form-section__grouping');
-		for (let i = 0; i < (await allQuestions.count()); i++) {
-			const question = allQuestions.nth(i);
 
-			separatedLog(`Question: ${i + 1}`);
+		for (const question of await allQuestions.all()) answerStatus.push(await treatQuestion(question));
 
-			answerStatus.push(await treatQuestion(question));
-		}
+		const problemWithQuestion = answerStatus.includes(false);
+		console.log(problemWithQuestion);
 
-		const problemWithQuestion = answerStatus.find((status) => status === false);
 		if (problemWithQuestion) {
+			console.log('Job application failed, questions no answer');
+
 			await cancelApply(modal);
 			return false;
 		}
 
-		finishApply(modal);
+		const problemWithApply = await finishApply(modal);
+		if (problemWithApply) return false;
+
+		console.log('Job application success');
 		return true;
 	}
 }
 
-async function nextFormStep(modal: Locator) {
-	await forcedDelay(randomRange(1, 2));
+async function nextFormStep(modal: Locator): Promise<void> {
+	await humanLikeDelay(1, 2);
 	const form = modal.locator('form');
 	const modalPageTitle = (await form.locator('h3').first().innerText()).trim();
+	const questionFormWords = ['Perguntas adicionais', 'Additional Questions', 'Additional', 'Preguntas adicionales'];
+	// TODO: There must be another way for this !
 
-	// TODO: If submit application is available just click it !
-
-	// Todo: Read and adapt heading for:
+	// TODO: Read and adapt heading for:
 	// Contact info / Home address / Resume /
 	// Work experience / Education / Voluntary self identification
 	// Screening questions / Privacy policy / Additional / Perguntas Adicionais
 
-	// if (modalPageTitle === 'Perguntas adicionais' || modalPageTitle === 'Additional Questions') {
-	if (!['Perguntas adicionais', 'Additional Questions', 'Additional'].includes(modalPageTitle)) {
+	if (await submitWithoutQuestions(modal)) return;
+
+	if (!questionFormWords.includes(modalPageTitle)) {
 		await form.locator('button').filter({ hasText: 'Next' }).click();
-		await nextFormStep(modal);
+		return await nextFormStep(modal);
 	}
+
+	return;
+}
+
+async function submitWithoutQuestions(modal: Locator): Promise<boolean> {
+	return (
+		(await modal.locator('button').filter({ hasText: 'Submit application' }).isVisible()) ||
+		(await modal.locator('button').filter({ hasText: 'Review' }).isVisible())
+	);
 }
 
 async function finishApply(modal: Locator) {
-	await modal.locator('button').filter({ hasText: 'Review' }).click();
-	await modal.locator('input[type=checkbox]').click();
-	await modal.locator('button').filter({ hasText: 'Submit application' }).click();
+	try {
+		await humanLikeDelay(2, 4);
+		const ReviewIsVisible = await modal.locator('button').filter({ hasText: 'Review' }).isVisible();
+		if (ReviewIsVisible) await modal.locator('button').filter({ hasText: 'Review' }).click();
+
+		const subscribeCheckboxVisible = await modal.locator('.job-details-easy-apply-footer__section').isVisible();
+		if (subscribeCheckboxVisible) {
+			const subscribeContainer = await modal.locator('.job-details-easy-apply-footer__section');
+			const subscribeLabel = await subscribeContainer.locator('label');
+			await subscribeLabel.scrollIntoViewIfNeeded();
+			await subscribeLabel.click();
+		}
+
+		const submitButtonVisible = await modal.locator('button').filter({ hasText: 'Submit application' }).isVisible();
+		if (submitButtonVisible) await modal.locator('button').filter({ hasText: 'Submit application' }).click();
+
+		// Causing crash ????????
+		const postApplyModal = await page.locator('div[aria-labelledby="post-apply-modal"]');
+		await postApplyModal.locator('button[aria-label="Dismiss"]').click();
+
+		return false; // No problem with the apply process
+	} catch (err) {
+		console.log(err);
+
+		cancelApply(modal);
+		return true;
+	}
 }
 
 async function cancelApply(applyModal: Locator) {
-	applyModal.locator('type="cancel-icon"').click();
+	applyModal.locator('button[aria-label="Dismiss"]').click();
 
-	(await page.waitForSelector('[data-test-modal-id="data-test-easy-apply-discard-confirmation"]')).isVisible(); // FIXME: Can easily break
+	await page.locator('[data-test-modal-id="data-test-easy-apply-discard-confirmation"]').waitFor({ timeout: 10000 }); // FIXME: Can easily break
 	const exitModal = page.locator('[data-test-modal-id="data-test-easy-apply-discard-confirmation"]');
 
-	await exitModal.locator('button').filter({ hasText: 'Discard' }).click(); // Because of the annoying reminder
+	await exitModal.locator('button').filter({ hasText: 'Discard' }).click(); // Because of the annoying reminder on E-mail
 }
 
 function storeVisitedIds(sessionVisitedIds: string[]) {
@@ -191,9 +239,7 @@ function storeVisitedIds(sessionVisitedIds: string[]) {
 
 	if (IDQuantity < 1) return console.log('You are all caught up: ' + IDQuantity);
 
-	if (!existsSync('./storage/visitedID.json')) {
-		return writeFileSync(IdStoragePath, JSON.stringify(sessionVisitedIds), 'utf8');
-	}
+	if (!existsSync(IdStoragePath)) writeFileSync(IdStoragePath, JSON.stringify(sessionVisitedIds), 'utf8');
 
 	const { birthtime } = statSync(IdStoragePath);
 	const fileTime: number = birthtime.getTime();
@@ -214,6 +260,8 @@ function storeJobs(sessionAppliedJobs: IApplication[]) {
 	const jobsStoragePath = './storage/appliedJobs.json';
 	const deepSessionAppliedJobs: IApplication[] = JSON.parse(JSON.stringify(sessionAppliedJobs));
 
+	if (!existsSync(jobsStoragePath)) writeFileSync(jobsStoragePath, JSON.stringify(sessionAppliedJobs), 'utf8');
+
 	if (sessionAppliedJobs.length < 1) return "Didn't apply in any job";
 	const storedApplications: IApplication[] = JSON.parse(readFileSync(jobsStoragePath, 'utf8'));
 
@@ -233,12 +281,8 @@ function storeJobs(sessionAppliedJobs: IApplication[]) {
 	writeFileSync(jobsStoragePath, JSON.stringify(newApplications), 'utf8');
 }
 
-function separatedLog(contents: string) {
-	console.log('/// --------------');
-	console.log(contents);
-	console.log('/// --------------');
-}
+function humanLikeDelay(min: number, max: number) {
+	const forcedDelay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-function randomRange(min: number, max: number) {
-	return parseFloat((Math.random() * (max - min) + min).toFixed(5)) * 1000;
+	return forcedDelay(parseFloat((Math.random() * (max - min) + min).toFixed(5)) * 1000);
 }
