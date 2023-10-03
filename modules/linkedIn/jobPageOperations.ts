@@ -219,6 +219,8 @@ async function finishApply(modal: Locator) {
 		const submitButtonVisible = await modal.locator('button').filter({ hasText: 'Submit application' }).isVisible();
 		if (submitButtonVisible) await modal.locator('button').filter({ hasText: 'Submit application' }).click();
 
+		await humanLikeDelay(2, 3);
+
 		const postApplyModal = await page.locator('div[aria-labelledby="post-apply-modal"]');
 		await postApplyModal.locator('button[aria-label="Dismiss"]').click();
 
